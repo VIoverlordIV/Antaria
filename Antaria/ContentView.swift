@@ -78,7 +78,7 @@ struct ContentView: View {
             return try? GeoCodec.decode(data)
         }
     }
-
+    // test commit
     private func saveCurrentPolygon() {
         guard drawingPoints.count >= 3 else { return }
         do {

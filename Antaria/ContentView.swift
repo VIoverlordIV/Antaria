@@ -15,43 +15,54 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 12) {
-                MapCanvasView(
-                    isEditing: isEditing,
-                    drawingPoints: $drawingPoints,
-                    savedPolygons: loadSavedPolygons()
-                )
-                .ignoresSafeArea(edges: .top)
+            ZStack(alignment: .topTrailing) {
+                VStack(spacing: 12) {
+                    MapCanvasView(
+                        isEditing: isEditing,
+                        drawingPoints: $drawingPoints,
+                        savedPolygons: loadSavedPolygons()
+                    )
+                    .ignoresSafeArea(edges: .top)
 
-                if isEditing {
-                    HStack {
-                        Button("撤销") {
-                            if !drawingPoints.isEmpty { drawingPoints.removeLast() }
-                        }
-                        .buttonStyle(.bordered)
-
-                        Button("清空点") { drawingPoints.removeAll() }
+                    if isEditing {
+                        HStack {
+                            Button("撤销") {
+                                if !drawingPoints.isEmpty { drawingPoints.removeLast() }
+                            }
                             .buttonStyle(.bordered)
 
-                        Button("保存范围") { saveCurrentPolygon() }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(drawingPoints.count < 3)
+                            Button("清空点") { drawingPoints.removeAll() }
+                                .buttonStyle(.bordered)
 
-                        Button("完成") {
-                            isEditing = false
-                            drawingPoints.removeAll()
+                            Button("保存范围") { saveCurrentPolygon() }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(drawingPoints.count < 3)
+
+                            Button("完成") {
+                                isEditing = false
+                                drawingPoints.removeAll()
+                            }
+                            .buttonStyle(.bordered)
                         }
-                        .buttonStyle(.bordered)
+                        .padding(.horizontal)
+                        .padding(.bottom, 12)
                     }
-                    .padding(.horizontal)
-                    .padding(.bottom, 12)
-                } else {
-                    Button("开始画") {
+                }
+
+                // 🖊 画笔按钮：只有未编辑时显示
+                if !isEditing {
+                    Button {
                         isEditing = true
+                    } label: {
+                        Image(systemName: "pencil.tip")
+                            .font(.system(size: 18, weight: .semibold))
+                            .padding(12)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Circle())
                     }
-                    .buttonStyle(.borderedProminent)
-                    .padding(.horizontal)
-                    .padding(.bottom, 12)
+                    .padding(.trailing, 16)
+                    .padding(.top, 16)
+                    .accessibilityLabel("画笔")
                 }
             }
             .toolbar {

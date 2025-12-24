@@ -1,5 +1,6 @@
 import SwiftUI
 import MapKit
+import CoreLocation
 
 struct MapCanvasView: UIViewRepresentable {
     var isEditing: Bool
@@ -10,6 +11,8 @@ struct MapCanvasView: UIViewRepresentable {
     func makeUIView(context: Context) -> MKMapView {
         let map = MKMapView(frame: .zero)
         map.delegate = context.coordinator
+        // Initial sync
+        context.coordinator.parent = self
 
         // Tap: add a point
         let tap = UITapGestureRecognizer(target: context.coordinator,
@@ -20,16 +23,27 @@ struct MapCanvasView: UIViewRepresentable {
         context.coordinator.tap = tap
         map.addGestureRecognizer(tap)
 
-        // Pan: drag to add continuous points
-        let pan = UIPanGestureRecognizer(target: context.coordinator,
-                                         action: #selector(Coordinator.onPan(_:)))
-        pan.minimumNumberOfTouches = 1
-        pan.maximumNumberOfTouches = 1
-        pan.cancelsTouchesInView = false
-        pan.delegate = context.coordinator
-        pan.isEnabled = isEditing
-        context.coordinator.pan = pan
-        map.addGestureRecognizer(pan)
+        // Draw Pan: 1-finger drag to add continuous points
+        let drawPan = UIPanGestureRecognizer(target: context.coordinator,
+                                             action: #selector(Coordinator.onDrawPan(_:)))
+        drawPan.minimumNumberOfTouches = 1
+        drawPan.maximumNumberOfTouches = 1
+        drawPan.cancelsTouchesInView = true
+        drawPan.delegate = context.coordinator
+        drawPan.isEnabled = isEditing
+        context.coordinator.drawPan = drawPan
+        map.addGestureRecognizer(drawPan)
+
+        // Move Pan (editing only): 2-finger drag to move the map while editing
+        let movePan = UIPanGestureRecognizer(target: context.coordinator,
+                                             action: #selector(Coordinator.onMovePan(_:)))
+        movePan.minimumNumberOfTouches = 2
+        movePan.maximumNumberOfTouches = 2
+        movePan.cancelsTouchesInView = false
+        movePan.delegate = context.coordinator
+        movePan.isEnabled = isEditing
+        context.coordinator.movePan = movePan
+        map.addGestureRecognizer(movePan)
 
         // Initial location (Tokyo Station)
         let region = MKCoordinateRegion(
@@ -45,8 +59,11 @@ struct MapCanvasView: UIViewRepresentable {
     }
 
     func updateUIView(_ map: MKMapView, context: Context) {
+        // Keep coordinator in sync with latest SwiftUI values (isEditing, bindings, etc.)
+        context.coordinator.parent = self
         context.coordinator.tap?.isEnabled = isEditing
-        context.coordinator.pan?.isEnabled = isEditing
+        context.coordinator.drawPan?.isEnabled = isEditing
+        context.coordinator.movePan?.isEnabled = isEditing
         context.coordinator.applyEditingState(to: map, isEditing: isEditing)
 
         map.removeOverlays(map.overlays)
@@ -70,7 +87,12 @@ struct MapCanvasView: UIViewRepresentable {
     final class Coordinator: NSObject, MKMapViewDelegate, UIGestureRecognizerDelegate {
         var parent: MapCanvasView
         var tap: UITapGestureRecognizer?
-        var pan: UIPanGestureRecognizer?
+        var drawPan: UIPanGestureRecognizer?
+        var movePan: UIPanGestureRecognizer?
+
+        // For 2-finger map move while editing
+        private var movePanStartPoint: CGPoint?
+        private var movePanStartCenter: CLLocationCoordinate2D?
 
         // Used to avoid adding too many points when dragging
         private var lastAdded: CLLocationCoordinate2D?
@@ -80,11 +102,13 @@ struct MapCanvasView: UIViewRepresentable {
         }
 
         func applyEditingState(to map: MKMapView, isEditing: Bool) {
-            // When editing, disable map interactions so gestures become drawing gestures.
+            // While editing we want to draw with 1 finger.
+            // To avoid conflicts with MKMapView's 1-finger scroll, disable scroll during editing.
+            // We still allow zoom/rotate/pitch, and we provide our own 2-finger pan to move the map.
             map.isScrollEnabled = !isEditing
-            map.isZoomEnabled = !isEditing
-            map.isRotateEnabled = !isEditing
-            map.isPitchEnabled = !isEditing
+            map.isZoomEnabled = true
+            map.isRotateEnabled = true
+            map.isPitchEnabled = true
         }
 
         @objc func onTap(_ sender: UITapGestureRecognizer) {
@@ -96,7 +120,7 @@ struct MapCanvasView: UIViewRepresentable {
             lastAdded = coord
         }
 
-        @objc func onPan(_ sender: UIPanGestureRecognizer) {
+        @objc func onDrawPan(_ sender: UIPanGestureRecognizer) {
             guard parent.isEditing else { return }
             guard let map = sender.view as? MKMapView else { return }
 
@@ -125,6 +149,48 @@ struct MapCanvasView: UIViewRepresentable {
             }
         }
 
+        @objc func onMovePan(_ sender: UIPanGestureRecognizer) {
+            guard parent.isEditing else { return }
+            guard let map = sender.view as? MKMapView else { return }
+
+            switch sender.state {
+            case .began:
+                movePanStartPoint = sender.location(in: map)
+                movePanStartCenter = map.centerCoordinate
+
+            case .changed:
+                guard let startPoint = movePanStartPoint,
+                      let startCenter = movePanStartCenter else { return }
+
+                let currentPoint = sender.location(in: map)
+
+                // Convert points to coordinates and compute the delta in coordinate space
+                let startCoord = map.convert(startPoint, toCoordinateFrom: map)
+                let currentCoord = map.convert(currentPoint, toCoordinateFrom: map)
+
+                let dLat = startCoord.latitude - currentCoord.latitude
+                let dLon = startCoord.longitude - currentCoord.longitude
+
+                var newCenter = CLLocationCoordinate2D(
+                    latitude: startCenter.latitude + dLat,
+                    longitude: startCenter.longitude + dLon
+                )
+
+                // Keep longitude within [-180, 180]
+                if newCenter.longitude > 180 { newCenter.longitude -= 360 }
+                if newCenter.longitude < -180 { newCenter.longitude += 360 }
+
+                map.setCenter(newCenter, animated: false)
+
+            case .ended, .cancelled, .failed:
+                movePanStartPoint = nil
+                movePanStartCenter = nil
+
+            default:
+                break
+            }
+        }
+
         private func shouldAppend(coord: CLLocationCoordinate2D) -> Bool {
             guard let last = lastAdded else { return true }
             let a = CLLocation(latitude: last.latitude, longitude: last.longitude)
@@ -133,11 +199,13 @@ struct MapCanvasView: UIViewRepresentable {
             return a.distance(from: b) >= 3
         }
 
-        // Allow drawing gestures to coexist with map's internal recognizers.
-        // (We also disable map interactions during editing, but keeping this helps stability.)
+        // Allow our drawing gestures to coexist with the map's built-in recognizers.
+        // (Map interactions stay enabled; drawing is done with 2-finger pan while editing.)
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            true
+            // Allow our gestures to coexist, but keep 1-finger drawing exclusive.
+            if gestureRecognizer === drawPan { return false }
+            return true
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
